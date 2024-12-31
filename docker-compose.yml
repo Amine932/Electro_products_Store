@@ -1,0 +1,240 @@
+services:
+  discovery-service:
+    build: ./discovery-service
+    container_name: discovery-service
+    ports:
+      - '8761:8761'
+    healthcheck:
+      test: [ "CMD","curl","-f", "http://localhost:8761/actuator/health" ]
+      interval:  10s
+      retries:  4
+
+  config-service:
+    build: ./config-service
+    container_name: config-service
+    ports:
+      - '8082:8082'
+    environment:
+      EUREKASERVER_URI: "http://discovery-service:8761/eureka"
+    healthcheck:
+      test: [ "CMD","curl","-f", "http://localhost:8082/actuator/health" ]
+      interval : 10s
+      retries: 2
+    depends_on:
+      discovery-service:
+        condition: service_healthy
+
+  product-service :
+    build: ./product-service
+    container_name: product-service
+    ports:
+      - '8087:8087'
+    environment:
+      CONFIGSERVER_URI: "http://config-service:8082"
+      EUREKASERVER_URI: "http://discovery-service:8761/eureka"
+    healthcheck:
+      test: [ "CMD","curl","-f", "http://localhost:8087/actuator/health" ]
+      interval: 10s
+      retries: 4
+    depends_on:
+      config-service:
+        condition:
+          service_healthy
+
+  client-service:
+    build: ./client-service
+    container_name: client-service
+    ports:
+      - '8086:8086'
+    environment:
+      EUREKASERVER_URI: "http://discovery-service:8761/eureka"
+      CONFIGSERVER_URI: "http://config-service:8082"
+    healthcheck:
+      test: [ "CMD","curl","-f", "http://localhost:8086/actuator/health" ]
+      interval: 10s
+      retries: 4
+    depends_on:
+      config-service:
+        condition:
+          service_healthy
+
+
+
+
+  sale-service:
+    build: ./sale-service
+    container_name: sale-service
+    ports:
+      - '8083:8083'
+    environment:
+      KAFKA_URI: "http://kafka:9092"
+      CONFIGSERVER_URI: "http://config-service:8082"
+      ZIPKIN_URI: "http://zipkin:9411/api/v2/spans"
+      JWT_ISSUER_URI: "http://keycloak:8080/realms/my_store"
+      EUREKASERVER_URI: "http://discovery-service:8761/eureka"
+      JWT_JWK_SET_URI: "http://keycloak:8080/realms/my_store/protocol/openid-connect/certs"
+
+    healthcheck:
+      test: [ "CMD","curl","-f", "http://localhost:8083/actuator/health" ]
+      interval: 10s
+      retries: 4
+    depends_on:
+      client-service:
+        condition:
+          service_healthy
+      product-service:
+        condition:
+          service_healthy
+      config-service:
+        condition:
+          service_healthy
+
+
+  gateway-service:
+    build: ./Gateway
+    container_name: gateway-service
+    ports:
+      - '8088:8088'
+    environment:
+      EUREKASERVER_URI: "http://discovery-service:8761/eureka"
+      CONFIGSERVER_URI: "http://config-service:8082"
+    depends_on:
+      discovery-service:
+        condition:
+          service_healthy
+      config-service:
+        condition:
+          service_healthy
+
+  notification-service:
+    build: ./notification-service
+    container_name: notification-service
+    ports:
+      - '8040:8040'
+    environment:
+      KAFKA_URI: "http://kafka:9092"
+      EUREKASERVER_URI: "http://discovery-service:8761/eureka"
+    healthcheck:
+      test: [ "CMD","curl","-f", "http://localhost:8040/actuator/health" ]
+      interval: 10s
+      retries: 4
+
+
+  postgres-service:
+    image: postgres
+    container_name: postgres-service1
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: keycloak_db
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: k1234
+    ports:
+      - '5432:5432'
+    expose:
+      - '5432'
+    healthcheck:
+      test: "exit 0"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: keycloak
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres-service:5432/keycloak_db
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: k1234
+      KEYCLOAK_ADMIN: admin
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    command:
+      - start-dev
+    restart: always
+    ports:
+      - '8080:8080'
+    expose:
+      - '8080'
+    depends_on:
+      - postgres-service
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - '22181:2181'
+
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    links:
+      - zookeeper:zookeeper
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+  kafdrop:
+    image: obsidiandynamics/kafdrop
+    container_name: kafdrop
+    restart: "no"
+    ports:
+      - "8099:9000"
+    environment:
+      KAFKA_BROKERCONNECT: "kafka:29092"
+    depends_on:
+      - "kafka"
+
+
+  storage:
+    image: openzipkin/zipkin-elasticsearch7
+    container_name: elasticsearch
+    ports:
+      - 9200:9200
+
+  zipkin:
+    image: openzipkin/zipkin
+    container_name: zipkin
+    environment:
+      - STORAGE_TYPE=elasticsearch
+      - "ES_HOSTS=elasticsearch:9300"
+    ports:
+      - 9411:9411
+    depends_on:
+      - storage
+
+  dependencies:
+    image: openzipkin/zipkin-dependencies
+    container_name: dependencies
+    entrypoint: crond -f
+    depends_on:
+      - storage
+    environment:
+      - STORAGE_TYPE=elasticsearch
+      - "ES_HOSTS=elasticsearch:9300"
+      - "ES_NODES_WAN_ONLY=true"
+
+
+  store-front-end:
+    build: ./Store-Front-end
+    container_name: Store-Front-end
+    ports:
+      - '4200:80'
+    expose:
+      - '4200'
+    restart: always
+
+volumes:
+  postgres_data:

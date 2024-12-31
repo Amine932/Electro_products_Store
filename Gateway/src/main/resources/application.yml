@@ -1,0 +1,13 @@
+spring:
+  cloud:
+    gateway:
+      globalcors:
+        corsConfigurations:
+          '[/**]': # Nom de la configuration CORS personnalisée
+            allowedOrigins: "http://localhost:4200/"
+            allowedMethods: "*"
+            allowedHeaders: "*"
+            maxAge: 3600
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials, RETAIN_UNIQUE
+        - TokenRelay=
